@@ -143,7 +143,10 @@ def test(model, data, pos_encoding=None, opt=None):  # opt required for runtime 
   logits, accs = model(feat, pos_encoding), []
   for _, mask in data('train_mask', 'val_mask', 'test_mask'):
     pred = logits[mask].max(1)[1]
-    acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
+    if mask.sum().item() != 0:
+      acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
+    else:
+      acc = 0
     accs.append(acc)
   return accs
 
