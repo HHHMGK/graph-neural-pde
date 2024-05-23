@@ -1,7 +1,9 @@
 import argparse
 import time
 import os
+import gc
 
+from tqdm import tqdm
 import numpy as np
 import torch
 from torch_geometric.nn import GCNConv, ChebConv  # noqa
@@ -93,7 +95,13 @@ def train(model, optimizer, data, pos_encoding=None):
   optimizer.step()
   model.bm.update(model.getNFE())
   model.resetNFE()
-  return loss.item()
+
+  loss_val = loss.item()
+  del out, feat, loss
+  torch.cuda.empty_cache()
+  gc.collect()
+
+  return loss_val
 
 
 def train_OGB(model, mp, optimizer, data, pos_encoding=None):
@@ -215,11 +223,12 @@ def merge_cmd_args(cmd_opt, opt):
     opt['num_splits'] = cmd_opt['num_splits']
 
 
-def main(cmd_opt):
+def main(cmd_opt, printing = True):
   try:
     best_opt = best_params_dict[cmd_opt['dataset']]
     opt = {**cmd_opt, **best_opt}
     merge_cmd_args(cmd_opt, opt)
+    opt['epoch'] = min(opt['epoch'], cmd_opt['epoch'])
   except KeyError:
     opt = cmd_opt
 
@@ -243,22 +252,30 @@ def main(cmd_opt):
   data = dataset.data.to(device)
 
   parameters = [p for p in model.parameters() if p.requires_grad]
-  print_model_params(model)
+  if printing: 
+    print_model_params(model)
   optimizer = get_optimizer(opt['optimizer'], parameters, lr=opt['lr'], weight_decay=opt['decay'])
   best_time = best_epoch = train_acc = val_acc = test_acc = 0
 
   this_test = test_OGB if opt['dataset'] == 'ogbn-arxiv' else test
 
-  for epoch in range(1, opt['epoch']):
+  # for epoch in range(1, opt['epoch']):
+  for epoch in tqdm(range(1, opt['epoch'])):
     start_time = time.time()
 
     if opt['rewire_KNN'] and epoch % opt['rewire_KNN_epoch'] == 0 and epoch != 0:
       ei = apply_KNN(data, pos_encoding, model, opt)
       model.odeblock.odefunc.edge_index = ei
 
+    # print('Before training==================')
+    # print(torch.cuda.memory_allocated()/1024**2)
+    # print(torch.cuda.memory_cached()/1024**2)
     loss = train(model, optimizer, data, pos_encoding)
-    tmp_train_acc, tmp_val_acc, tmp_test_acc = this_test(model, data, pos_encoding, opt)
+    # print('After training==================')
+    # print(torch.cuda.memory_allocated()/1024**2)
+    # print(torch.cuda.memory_cached()/1024**2)
 
+    tmp_train_acc, tmp_val_acc, tmp_test_acc = this_test(model, data, pos_encoding, opt)
     best_time = opt['time']
     if tmp_val_acc > val_acc:
       best_epoch = epoch
@@ -274,11 +291,16 @@ def main(cmd_opt):
       best_time = model.odeblock.test_integrator.solver.best_time
 
     log = 'Epoch: {:03d}, Runtime {:03f}, Loss {:03f}, forward nfe {:d}, backward nfe {:d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}, Best time: {:.4f}'
-
-    print(log.format(epoch, time.time() - start_time, loss, model.fm.sum, model.bm.sum, train_acc, val_acc, test_acc, best_time))
-  print('best val accuracy {:03f} with test accuracy {:03f} at epoch {:d} and best time {:03f}'.format(val_acc, test_acc,
+    if printing:
+      print(log.format(epoch, time.time() - start_time, loss, model.fm.sum, model.bm.sum, train_acc, val_acc, test_acc, best_time))
+  if printing:
+    print('best val accuracy {:03f} with test accuracy {:03f} at epoch {:d} and best time {:03f}'.format(val_acc, test_acc,
                                                                                                      best_epoch,
                                                                                                      best_time))
+  # Clear and Free mem
+  del model, optimizer, data, parameters, this_test, dataset
+  gc.collect()
+  torch.cuda.empty_cache()
   return train_acc, val_acc, test_acc
 
 
@@ -439,7 +461,13 @@ if __name__ == '__main__':
 
 
   args = parser.parse_args()
-
-  opt = vars(args)
   
+  opt = vars(args)
+  # print(type(args))
+  # print(args)
+  # print(type(opt))
+  # print(opt)
+  starttime = time.time()
   main(opt)
+  print('Execution time', time.time()-starttime)
+  

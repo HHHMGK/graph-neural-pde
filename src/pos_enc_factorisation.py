@@ -39,7 +39,7 @@ def find_or_make_encodings(opt):
       pos_encoding = apply_gdc(data, opt, type="pos_encoding")
     else:
       print(f"[x] The positional encoding type you specified ({opt['pos_enc_type']}) does not exist")
-      quit()
+      exit()
     # - ... and store them on disk
     if not os.path.exists(POS_ENC_PATH):
       os.makedirs(POS_ENC_PATH)
